@@ -85,4 +85,13 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
+    // AppLovin MAX mediation adapters (the MAX SDK itself comes with the
+    // applovin_max Flutter plugin). Each adapter pulls in its network's SDK.
+    // Before a release, pin these to the versions AppLovin's Integration
+    // Manager / "Preparing Mediated Networks" page lists for MAX SDK 13.x —
+    // "+" always takes the newest, which can change between builds.
+    implementation("com.applovin.mediation:facebook-adapter:+")   // Meta Audience Network (bidding)
+    implementation("com.applovin.mediation:mintegral-adapter:+")  // Mintegral (bidding)
+    implementation("com.applovin.mediation:unityads-adapter:+")   // Unity Ads (waterfall)
 }

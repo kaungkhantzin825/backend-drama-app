@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release and profile builds: HTTPS everywhere, except localhost.
+
+  Meta Audience Network (mediated through AppLovin MAX) caches video ads
+  through a local proxy on 127.0.0.1; without this exception those ads fail
+  to play on Android 9+.
+
+  Debug builds use src/debug/res/xml/network_security_config.xml instead,
+  which also allows plain HTTP to a local dev API.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

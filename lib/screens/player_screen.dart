@@ -306,7 +306,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _share(Drama video) async {
-    final text = '${video.title} on DramaLoop\n${ApiConfig.dramaShareUrl(video.slug)}';
+    final text = '${video.title} on MyanCash\n${ApiConfig.dramaShareUrl(video.slug)}';
 
     try {
       await Share.share(text, subject: video.title);

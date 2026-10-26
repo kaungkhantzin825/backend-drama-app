@@ -1,11 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
-import 'services/ad_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,10 +24,7 @@ void main() {
     DeviceOrientation.portraitDown,
   ]);
 
-  // Warm the ad SDK up while the first screen paints; it is a no-op on web.
-  // Ads are preloaded later, once the remote config says which units to use
-  // (see adBootstrapProvider).
-  unawaited(AdService.instance.initialize());
-
+  // AppLovin MAX starts once the remote config has delivered the SDK key and
+  // ad units (see adBootstrapProvider → AdService.init).
   runApp(const ProviderScope(child: DramaLoopApp()));
 }

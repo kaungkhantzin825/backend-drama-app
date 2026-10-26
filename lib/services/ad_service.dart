@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:ui' show Color;
+import 'dart:math' as math;
 
+import 'package:applovin_max/applovin_max.dart';
 import 'package:flutter/foundation.dart';
-import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ad_config.dart';
@@ -22,34 +22,23 @@ enum RewardedOutcome {
   unavailable,
 }
 
-/// Where a loaded ad came from, so its impression/click/revenue can be
-/// attributed to the right waterfall step.
-class _Origin {
-  const _Origin(this.format, this.unitId, this.tier);
-
-  final String format;
-  final String unitId;
-  final int tier;
-}
-
-/// One place that owns every AdMob call.
+/// One place that owns every AppLovin MAX call.
 ///
-/// The SDK is a process-wide singleton with real lifecycle constraints — an ad
-/// object can only be shown once, and showing a second one before the first is
-/// dismissed crashes. Keeping every load/show here means the screens never have
-/// to reason about that; they ask for an ad and get an answer.
+/// **Mediation.** MAX runs the auction itself — AppLovin, Meta Audience
+/// Network and Mintegral bid, Unity Ads fills from a waterfall — all set up in
+/// the MAX dashboard. The app only knows one MAX ad unit per format.
 ///
-/// **Remote config.** What to show is decided by the backend
-/// (`GET /api/v1/app-config` → [init]): the master switch, the interstitial
-/// gap, per-placement rules, and the ad units. Until that arrives (or if it
-/// never does) the build-time units in [AdConfig] are used.
+/// **Remote config.** The SDK key, the units, the test devices, the master
+/// switch, the interstitial gap and the per-placement rules come from the
+/// backend (`GET /api/v1/app-config` → [init]). Without an SDK key nothing
+/// starts and no ad is shown.
 ///
-/// **Waterfall.** Each format has an ordered list of units, highest eCPM floor
-/// first. A load walks the list and keeps the first unit that fills; each step
-/// is capped at [AdSettings.loadTimeout] so a slow network cannot stall it.
+/// **Readiness.** MAX reports loads through callbacks; this class mirrors them
+/// into plain flags so the player can ask "is an ad ready?" synchronously.
+/// Failed loads are retried with exponential backoff, as MAX recommends.
 ///
-/// **Traffic.** Every step and every shown ad is reported through
-/// [AdTrafficReporter], which feeds the admin Traffic → Ads screen.
+/// **Traffic.** Requests, fills, impressions, clicks and revenue are reported
+/// through [AdTrafficReporter] for the admin Traffic → Ads screen.
 ///
 /// Nothing in this class throws. A missing ad is a normal outcome, not an
 /// error, and never blocks the video player.
@@ -58,26 +47,34 @@ class AdService {
 
   static final AdService instance = AdService._();
 
+  static const _fullScreen = ['interstitial', 'rewarded', 'app_open'];
+
   AdSettings _settings = AdSettings.fallback();
   final Completer<void> _configReady = Completer<void>();
   AdTrafficReporter? _reporter;
-  final Expando<_Origin> _origins = Expando('adOrigin');
 
-  Future<void>? _initializing;
+  Future<bool>? _starting;
   bool _initialized = false;
 
-  RewardedAd? _rewarded;
-  bool _loadingRewarded = false;
+  // ─── Full-screen state, mirrored from the SDK callbacks ──────────────────
+  final Map<String, bool> _ready = {};
+  final Map<String, bool> _loading = {};
+  final Map<String, int> _retries = {};
+  final Map<String, Completer<bool>> _loadWaiters = {};
+  final Map<String, String> _placements = {};
 
-  InterstitialAd? _interstitial;
-  bool _loadingInterstitial = false;
+  Completer<bool>? _interstitialShowing;
+  Completer<bool>? _appOpenShowing;
+  Completer<RewardedOutcome>? _rewardedShowing;
+  bool _rewardEarned = false;
+
+  // ─── Banner / MREC preloads ───────────────────────────────────────────────
+  final Map<AdViewId, Completer<bool>> _adViewWaiters = {};
+  final Map<AdViewId, bool> _adViewResults = {};
 
   /// When the last interstitial actually appeared on screen. Drives the
   /// `ad_interval_seconds` cap; null until the first one is shown.
   DateTime? _lastInterstitialAt;
-
-  AppOpenAd? _appOpen;
-  bool _loadingAppOpen = false;
   bool _appOpenShownThisSession = false;
 
   // ─── Placement-rule counters ──────────────────────────────────────────────
@@ -101,16 +98,18 @@ class AdService {
 
   bool get isSupported => AdConfig.isSupported;
 
-  /// True when this platform can show ads *and* the backend allows them.
-  bool get adsEnabled => AdConfig.isSupported && _settings.enabled;
+  /// True when this platform can show ads, the backend allows them, and there
+  /// is an SDK key to start MAX with.
+  bool get adsEnabled =>
+      AdConfig.isSupported && _settings.enabled && _settings.sdkKey.isNotEmpty;
 
   bool get isInitialized => _initialized;
 
-  bool get hasRewardedAd => _rewarded != null;
+  bool get hasRewardedAd => _ready['rewarded'] ?? false;
 
-  bool get hasInterstitial => _interstitial != null;
+  bool get hasInterstitial => _ready['interstitial'] ?? false;
 
-  bool get hasAppOpenAd => _appOpen != null;
+  bool get hasAppOpenAd => _ready['app_open'] ?? false;
 
   DateTime? get lastInterstitialAt => _lastInterstitialAt;
 
@@ -125,69 +124,239 @@ class AdService {
   /// backend "ads off" is respected from the very first frame.
   Future<void> get ready => _configReady.future;
 
+  /// The MAX unit for [format] on this platform, or null when unset.
+  String? unitFor(String format) {
+    final unit = _settings.unit(format);
+    return unit == null || unit.isEmpty ? null : unit;
+  }
+
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
   /// Where ad traffic events go. Set once at startup.
   void attachReporter(AdTrafficReporter reporter) => _reporter = reporter;
 
-  /// Applies the backend's ad config, starts the SDK and preloads the
-  /// full-screen formats through their waterfalls.
+  /// Applies the backend's ad config, starts MAX and preloads the full-screen
+  /// formats.
   ///
-  /// Safe to call again (e.g. after a config refresh): cached ads are kept,
-  /// and the new interval/rules/units apply from the next load.
+  /// Safe to call again (e.g. after a config refresh): the new interval,
+  /// rules and units apply from the next load. The SDK key and test devices
+  /// only take effect on the first start, as MAX initializes once per process.
   Future<void> init(AdSettings config) async {
     _settings = config;
     await _loadCounters();
     if (!_configReady.isCompleted) _configReady.complete();
 
-    if (!adsEnabled) {
-      _disposeCachedAds();
-      return;
-    }
+    if (!await _start()) return;
 
-    await initialize();
-
-    unawaited(loadInterstitial());
-    unawaited(loadRewarded());
-    if (rules.appOpenEnabled) unawaited(loadAppOpen());
+    _load('interstitial');
+    _load('rewarded');
+    if (rules.appOpenEnabled) _load('app_open');
   }
 
-  /// Starts the Mobile Ads SDK once. Does not preload — [init] does that once
-  /// it knows which units to use.
-  Future<void> initialize() {
-    if (!AdConfig.isSupported) return Future<void>.value();
+  /// Starts MAX once, with the configured SDK key. True when it is running.
+  Future<bool> _start() {
+    if (!adsEnabled) return Future<bool>.value(false);
 
-    return _initializing ??= _initializeOnce();
+    return _starting ??= _startOnce();
   }
 
-  Future<void> _initializeOnce() async {
+  Future<bool> _startOnce() async {
     try {
-      if (AdConfig.testDeviceIds.isNotEmpty) {
-        await MobileAds.instance.updateRequestConfiguration(
-          RequestConfiguration(testDeviceIds: AdConfig.testDeviceIds),
-        );
+      _attachListeners();
+
+      // Must be set before initialize to take effect.
+      if (_settings.testDeviceIds.isNotEmpty) {
+        AppLovinMAX.setTestDeviceAdvertisingIds(_settings.testDeviceIds);
       }
 
-      await MobileAds.instance.initialize();
-      _initialized = true;
+      _initialized = await AppLovinMAX.initialize(_settings.sdkKey) != null;
     } catch (error, stack) {
-      // A failed SDK init must never take the app down with it.
-      debugPrint('AdMob init failed: $error\n$stack');
+      // A failed SDK start must never take the app down with it.
+      debugPrint('AppLovin MAX init failed: $error\n$stack');
+      _initialized = false;
+    }
+
+    if (!_initialized) _starting = null;
+
+    return _initialized;
+  }
+
+  /// Opens MAX's built-in panel listing every network adapter and whether it
+  /// initialized — the first thing to check when a network never fills.
+  Future<void> showMediationDebugger() async {
+    if (await _start()) AppLovinMAX.showMediationDebugger();
+  }
+
+  // ─── SDK callbacks ────────────────────────────────────────────────────────
+
+  void _attachListeners() {
+    AppLovinMAX.setInterstitialListener(InterstitialListener(
+      onAdLoadedCallback: (ad) => _loaded('interstitial'),
+      onAdLoadFailedCallback: (unitId, error) => _loadFailed('interstitial', unitId, error),
+      onAdDisplayedCallback: (ad) {
+        _lastInterstitialAt = DateTime.now();
+        _countShown(interstitial: true);
+        _trackAd('impression', 'interstitial', ad);
+      },
+      onAdDisplayFailedCallback: (ad, error) {
+        _trackAd('show_failed', 'interstitial', ad);
+        _finishInterstitial(false);
+      },
+      onAdClickedCallback: (ad) => _trackAd('click', 'interstitial', ad),
+      onAdHiddenCallback: (ad) => _finishInterstitial(true),
+      onAdRevenuePaidCallback: (ad) => _trackRevenue('interstitial', ad),
+    ));
+
+    AppLovinMAX.setRewardedAdListener(RewardedAdListener(
+      onAdLoadedCallback: (ad) => _loaded('rewarded'),
+      onAdLoadFailedCallback: (unitId, error) => _loadFailed('rewarded', unitId, error),
+      onAdDisplayedCallback: (ad) {
+        _countShown(rewarded: true);
+        _trackAd('impression', 'rewarded', ad);
+      },
+      onAdDisplayFailedCallback: (ad, error) {
+        _trackAd('show_failed', 'rewarded', ad);
+        _finishRewarded(RewardedOutcome.unavailable);
+      },
+      onAdClickedCallback: (ad) => _trackAd('click', 'rewarded', ad),
+      onAdHiddenCallback: (ad) => _finishRewarded(
+        _rewardEarned ? RewardedOutcome.earned : RewardedOutcome.dismissed,
+      ),
+      onAdReceivedRewardCallback: (ad, reward) => _rewardEarned = true,
+      onAdRevenuePaidCallback: (ad) => _trackRevenue('rewarded', ad),
+    ));
+
+    AppLovinMAX.setAppOpenAdListener(AppOpenAdListener(
+      onAdLoadedCallback: (ad) => _loaded('app_open'),
+      onAdLoadFailedCallback: (unitId, error) => _loadFailed('app_open', unitId, error),
+      onAdDisplayedCallback: (ad) => _trackAd('impression', 'app_open', ad),
+      onAdDisplayFailedCallback: (ad, error) {
+        _trackAd('show_failed', 'app_open', ad);
+        _finishAppOpen(false);
+      },
+      onAdClickedCallback: (ad) => _trackAd('click', 'app_open', ad),
+      onAdHiddenCallback: (ad) => _finishAppOpen(true),
+      onAdRevenuePaidCallback: (ad) => _trackRevenue('app_open', ad),
+    ));
+
+    AppLovinMAX.setWidgetAdViewAdListener(WidgetAdViewAdListener(
+      onAdLoadedCallback: (ad) {
+        final id = ad.adViewId;
+        if (id != null) _adViewSettled(id, true);
+        _trackAd('fill', ad.adFormat.toLowerCase(), ad, placement: 'preload');
+      },
+      onAdLoadFailedCallback: (unitId, error) {
+        final id = error.adViewId;
+        if (id != null) _adViewSettled(id, false);
+        _reporter?.track('no_fill', format: _formatOfUnit(unitId), placement: 'preload', unitId: unitId, tier: 1);
+      },
+    ));
+  }
+
+  void _loaded(String format) {
+    _ready[format] = true;
+    _loading[format] = false;
+    _retries[format] = 0;
+    _trackUnit('fill', format, placement: 'preload');
+    _loadWaiters.remove(format)?.complete(true);
+  }
+
+  /// MAX's recommended retry: 2, 4, 8 … up to 64 seconds between attempts.
+  void _loadFailed(String format, String unitId, MaxError error) {
+    debugPrint('$format no fill: ${error.message}');
+    _ready[format] = false;
+    _loading[format] = false;
+    _reporter?.track('no_fill', format: format, placement: 'preload', unitId: unitId, tier: 1);
+    _loadWaiters.remove(format)?.complete(false);
+
+    final attempt = math.min((_retries[format] ?? 0) + 1, 6);
+    _retries[format] = attempt;
+    Future<void>.delayed(Duration(seconds: math.pow(2, attempt).toInt()), () => _load(format));
+  }
+
+  /// Requests a full-screen ad for [format] unless one is loaded or loading.
+  void _load(String format) {
+    final unit = unitFor(format);
+    if (!_initialized || !adsEnabled || unit == null) return;
+    if ((_ready[format] ?? false) || (_loading[format] ?? false)) return;
+    if (format == 'app_open' && !rules.appOpenEnabled) return;
+
+    _loading[format] = true;
+    _trackUnit('request', format, placement: 'preload');
+
+    try {
+      switch (format) {
+        case 'interstitial':
+          AppLovinMAX.loadInterstitial(unit);
+        case 'rewarded':
+          AppLovinMAX.loadRewardedAd(unit);
+        case 'app_open':
+          AppLovinMAX.loadAppOpenAd(unit);
+      }
+    } catch (error) {
+      debugPrint('$format load threw: $error');
+      _loading[format] = false;
     }
   }
 
-  void _disposeCachedAds() {
-    _interstitial?.dispose();
-    _interstitial = null;
-    _rewarded?.dispose();
-    _rewarded = null;
-    _appOpen?.dispose();
-    _appOpen = null;
+  /// Waits up to [timeout] for [format] to load (starting a load if needed).
+  Future<bool> _waitForLoad(String format, Duration timeout) async {
+    if (_ready[format] ?? false) return true;
+
+    final waiter = _loadWaiters.putIfAbsent(format, Completer<bool>.new);
+    _load(format);
+
+    return waiter.future.timeout(timeout, onTimeout: () => _ready[format] ?? false);
+  }
+
+  // ─── Telemetry ────────────────────────────────────────────────────────────
+
+  String _formatOfUnit(String unitId) {
+    for (final format in [..._fullScreen, 'banner', 'mrec']) {
+      if (unitFor(format) == unitId) return format;
+    }
+    return 'unknown';
+  }
+
+  void _trackUnit(String event, String format, {String? placement}) {
+    _reporter?.track(event, format: format, placement: placement, unitId: unitFor(format), tier: 1);
+  }
+
+  void _trackAd(String event, String format, MaxAd ad, {String? placement}) {
+    _reporter?.track(
+      event,
+      format: format,
+      placement: placement ?? _placements[format] ?? ad.placement,
+      unitId: ad.adUnitId,
+      tier: 1,
+    );
+  }
+
+  /// MAX reports revenue per impression in USD; the backend stores micros.
+  void _trackRevenue(String format, MaxAd ad) {
+    _reporter?.track(
+      'paid',
+      format: format,
+      placement: _placements[format] ?? ad.placement,
+      unitId: ad.adUnitId,
+      tier: 1,
+      valueMicros: (ad.revenue * 1000000).round(),
+    );
+  }
+
+  /// Banner / MREC events from a mounted [MaxAdView].
+  void trackAdView(String event, String format, MaxAd ad, {required String placement}) {
+    if (event == 'paid') {
+      _reporter?.track('paid',
+          format: format, placement: placement, unitId: ad.adUnitId, tier: 1, valueMicros: (ad.revenue * 1000000).round());
+      return;
+    }
+    _trackAd(event, format, ad, placement: placement);
   }
 
   // ─── Placement-rule counters ──────────────────────────────────────────────
 
-  /// The player calls this each time the viewer moves past an episode.
+  /// The player calls this each time the viewer swipes past a video.
   /// Interstitials start only after `first_after_episodes` of them.
   void noteEpisodeFinished() => _episodesFinished++;
 
@@ -235,158 +404,7 @@ class AdService {
   /// 0 means "no limit" for every cap.
   bool _under(int used, int cap) => cap <= 0 || used < cap;
 
-  // ─── Waterfall ────────────────────────────────────────────────────────────
-
-  void _track(
-    String event,
-    String format, {
-    String? placement,
-    String? unitId,
-    int? tier,
-    int? valueMicros,
-  }) {
-    _reporter?.track(
-      event,
-      format: format,
-      placement: placement,
-      unitId: unitId,
-      tier: tier,
-      valueMicros: valueMicros,
-    );
-  }
-
-  /// Walks [units] in order and returns the first ad that loads, or null.
-  Future<T?> _loadWaterfall<T extends Ad>(
-    String format,
-    List<String> units,
-    void Function(
-      String unitId,
-      void Function(T ad) onLoaded,
-      void Function(LoadAdError error) onFailed,
-    ) start,
-  ) async {
-    for (var tier = 0; tier < units.length; tier++) {
-      final ad = await _loadOne<T>(format, tier + 1, units[tier], start);
-      if (ad != null) return ad;
-    }
-
-    return null;
-  }
-
-  /// One waterfall step (1-based [tier]), capped at the configured timeout.
-  ///
-  /// An ad that arrives after the step has timed out is disposed rather than
-  /// leaked — the waterfall has already moved on to the next unit.
-  Future<T?> _loadOne<T extends Ad>(
-    String format,
-    int tier,
-    String unitId,
-    void Function(
-      String unitId,
-      void Function(T ad) onLoaded,
-      void Function(LoadAdError error) onFailed,
-    ) start,
-  ) {
-    final completer = Completer<T?>();
-    var abandoned = false;
-
-    _track('request', format, placement: 'preload', unitId: unitId, tier: tier);
-
-    try {
-      start(
-        unitId,
-        (ad) {
-          if (abandoned || completer.isCompleted) {
-            ad.dispose();
-            return;
-          }
-          _origins[ad] = _Origin(format, unitId, tier);
-          _track('fill', format, placement: 'preload', unitId: unitId, tier: tier);
-          completer.complete(ad);
-        },
-        (error) {
-          debugPrint('$format tier $tier no fill: ${error.message}');
-          _track('no_fill', format, placement: 'preload', unitId: unitId, tier: tier);
-          if (!completer.isCompleted) completer.complete(null);
-        },
-      );
-    } catch (error) {
-      debugPrint('$format tier $tier load threw: $error');
-      _track('no_fill', format, placement: 'preload', unitId: unitId, tier: tier);
-      if (!completer.isCompleted) completer.complete(null);
-    }
-
-    return completer.future.timeout(
-      _settings.loadTimeout,
-      onTimeout: () {
-        abandoned = true;
-        debugPrint('$format tier $tier timed out');
-        _track('timeout', format, placement: 'preload', unitId: unitId, tier: tier);
-        return null;
-      },
-    );
-  }
-
-  /// Reports what a shown full-screen ad does: impression, click, revenue.
-  FullScreenContentCallback<T> _trackedCallback<T extends AdWithoutView>(
-    T ad,
-    String placement, {
-    void Function(T ad)? onShowed,
-    required void Function(T ad) onDismissed,
-    required void Function(T ad, AdError error) onFailed,
-  }) {
-    final origin = _origins[ad];
-
-    void track(String event, {int? value}) => _track(
-          event,
-          origin?.format ?? 'unknown',
-          placement: placement,
-          unitId: origin?.unitId,
-          tier: origin?.tier,
-          valueMicros: value,
-        );
-
-    ad.onPaidEvent = (_, valueMicros, precision, currency) =>
-        track('paid', value: valueMicros.round());
-
-    return FullScreenContentCallback<T>(
-      onAdShowedFullScreenContent: onShowed,
-      onAdImpression: (_) => track('impression'),
-      onAdClicked: (_) => track('click'),
-      onAdDismissedFullScreenContent: onDismissed,
-      onAdFailedToShowFullScreenContent: (ad, error) {
-        track('show_failed');
-        onFailed(ad, error);
-      },
-    );
-  }
-
   // ─── Interstitial ─────────────────────────────────────────────────────────
-
-  /// Preloads an interstitial in the background, if none is cached.
-  Future<void> loadInterstitial() async {
-    if (!adsEnabled || _loadingInterstitial || _interstitial != null) return;
-
-    _loadingInterstitial = true;
-    await initialize();
-
-    try {
-      _interstitial = await _loadWaterfall<InterstitialAd>(
-        'interstitial',
-        _settings.waterfall('interstitial'),
-        (unitId, onLoaded, onFailed) => InterstitialAd.load(
-          adUnitId: unitId,
-          request: const AdRequest(),
-          adLoadCallback: InterstitialAdLoadCallback(
-            onAdLoaded: onLoaded,
-            onAdFailedToLoad: onFailed,
-          ),
-        ),
-      );
-    } finally {
-      _loadingInterstitial = false;
-    }
-  }
 
   /// True when the `ad_interval_seconds` gap since the last interstitial has
   /// passed (or none has been shown yet this session).
@@ -406,24 +424,23 @@ class AdService {
   /// Synchronous, so the player can decide to pause *before* calling it — a
   /// skipped break then costs the viewer nothing, not even a frame.
   bool get isEpisodeInterstitialDue =>
-      isInterstitialDue &&
-      _episodesFinished >= rules.interstitialFirstAfterEpisodes;
+      isInterstitialDue && _episodesFinished >= rules.interstitialFirstAfterEpisodes;
 
-  /// Like [isEpisodeInterstitialDue] but without the first-N-episodes gate —
+  /// Like [isEpisodeInterstitialDue] but without the first-N-videos gate —
   /// for the ad that follows each completed watch minute.
   bool get isInterstitialDue =>
-      adsEnabled && _interstitialAllowed && _interstitial != null;
+      adsEnabled && _interstitialAllowed && hasInterstitial && _interstitialShowing == null;
 
-  /// The between-episodes ad break.
+  /// The between-videos ad break.
   ///
   /// [onAdDismissed] is always called exactly once:
   ///  * immediately, when ads are off, a rule says not yet (interval, first
-  ///    N episodes, session/day cap), or no ad is preloaded (one is then
-  ///    requested in the background for next time);
+  ///    N videos, session/day cap), or no ad is loaded (one is then requested
+  ///    in the background for next time);
   ///  * after the ad closes, or fails to show, otherwise.
   ///
   /// The player never waits on a network load here — only on an ad that is
-  /// already in memory.
+  /// already loaded.
   Future<void> showEpisodeInterstitialAd({
     required VoidCallback onAdDismissed,
     String placement = 'episode_break',
@@ -443,20 +460,18 @@ class AdService {
       return;
     }
 
-    final ad = _interstitial;
-    if (ad == null) {
+    if (!hasInterstitial) {
       done();
-      unawaited(loadInterstitial());
+      _load('interstitial');
       return;
     }
 
-    _interstitial = null;
-    await _present(ad, placement);
+    await _presentInterstitial(placement);
     done();
   }
 
-  /// Shows an interstitial at another natural break (e.g. after an unlock),
-  /// subject to the same interval and caps as episode breaks.
+  /// Shows an interstitial at another natural break, subject to the same
+  /// interval and caps as video breaks.
   ///
   /// [force] bypasses every rule and waits for a load — only the ad test bench
   /// uses it. Returns true when an ad was actually presented.
@@ -467,85 +482,50 @@ class AdService {
     if (!adsEnabled) return false;
     if (!force && !_interstitialAllowed) return false;
 
-    if (_interstitial == null) {
+    if (!hasInterstitial) {
       if (!force) {
-        unawaited(loadInterstitial());
+        _load('interstitial');
         return false;
       }
-      await loadInterstitial();
+      if (!await _start() || !await _waitForLoad('interstitial', const Duration(seconds: 15))) {
+        return false;
+      }
     }
 
-    final ad = _interstitial;
-    if (ad == null) return false;
-
-    _interstitial = null;
-    return _present(ad, force ? 'test_bench' : placement);
+    return _presentInterstitial(force ? 'test_bench' : placement);
   }
 
-  /// Shows a cached interstitial; completes when it closes. Always queues the
-  /// next one, so the following break has an ad ready.
-  Future<bool> _present(InterstitialAd ad, String placement) async {
-    final completer = Completer<bool>();
+  /// Shows the loaded interstitial; completes when it closes. The next one is
+  /// requested as soon as this one is gone.
+  Future<bool> _presentInterstitial(String placement) {
+    final unit = unitFor('interstitial');
+    if (unit == null || _interstitialShowing != null) return Future<bool>.value(false);
 
-    void finish(bool shown) {
-      if (!completer.isCompleted) completer.complete(shown);
-      unawaited(loadInterstitial());
-    }
-
-    ad.fullScreenContentCallback = _trackedCallback<InterstitialAd>(
-      ad,
-      placement,
-      onShowed: (_) {
-        _lastInterstitialAt = DateTime.now();
-        _countShown(interstitial: true);
-      },
-      onDismissed: (ad) {
-        ad.dispose();
-        finish(true);
-      },
-      onFailed: (ad, error) {
-        ad.dispose();
-        debugPrint('Interstitial failed to show: ${error.message}');
-        finish(false);
-      },
-    );
+    final showing = _interstitialShowing = Completer<bool>();
+    _ready['interstitial'] = false;
+    _placements['interstitial'] = placement;
 
     try {
-      await ad.show();
+      AppLovinMAX.showInterstitial(unit, placement: placement);
     } catch (error) {
       debugPrint('Interstitial show threw: $error');
-      ad.dispose();
-      finish(false);
+      _finishInterstitial(false);
     }
 
-    return completer.future.timeout(_showGuard, onTimeout: () => true);
+    return showing.future.timeout(_showGuard, onTimeout: () {
+      _finishInterstitial(true);
+      return true;
+    });
+  }
+
+  void _finishInterstitial(bool shown) {
+    final showing = _interstitialShowing;
+    _interstitialShowing = null;
+    if (showing != null && !showing.isCompleted) showing.complete(shown);
+    _load('interstitial');
   }
 
   // ─── Rewarded ─────────────────────────────────────────────────────────────
-
-  Future<void> loadRewarded() async {
-    if (!adsEnabled || _loadingRewarded || _rewarded != null) return;
-
-    _loadingRewarded = true;
-    await initialize();
-
-    try {
-      _rewarded = await _loadWaterfall<RewardedAd>(
-        'rewarded',
-        _settings.waterfall('rewarded'),
-        (unitId, onLoaded, onFailed) => RewardedAd.load(
-          adUnitId: unitId,
-          request: const AdRequest(),
-          rewardedAdLoadCallback: RewardedAdLoadCallback(
-            onAdLoaded: onLoaded,
-            onAdFailedToLoad: onFailed,
-          ),
-        ),
-      );
-    } finally {
-      _loadingRewarded = false;
-    }
-  }
 
   /// Whether the daily rewarded cap still allows another one.
   bool get rewardedAllowed =>
@@ -561,84 +541,41 @@ class AdService {
       return kDebugMode ? RewardedOutcome.earned : RewardedOutcome.unavailable;
     }
 
-    if (!adsEnabled || !rewardedAllowed) return RewardedOutcome.unavailable;
-
-    if (_rewarded == null) await loadRewarded();
-
-    final ad = _rewarded;
-    if (ad == null) return RewardedOutcome.unavailable;
-
-    // Take it out of the cache immediately: an ad instance is single-use, and a
-    // second `show()` on the same object is a hard crash.
-    _rewarded = null;
-
-    final completer = Completer<RewardedOutcome>();
-    var earned = false;
-
-    void settle(RewardedOutcome outcome) {
-      if (!completer.isCompleted) completer.complete(outcome);
-    }
-
-    ad.fullScreenContentCallback = _trackedCallback<RewardedAd>(
-      ad,
-      placement,
-      onShowed: (_) => _countShown(rewarded: true),
-      onDismissed: (ad) {
-        ad.dispose();
-        unawaited(loadRewarded());
-        settle(earned ? RewardedOutcome.earned : RewardedOutcome.dismissed);
-      },
-      onFailed: (ad, error) {
-        ad.dispose();
-        unawaited(loadRewarded());
-        debugPrint('Rewarded ad failed to show: ${error.message}');
-        settle(RewardedOutcome.unavailable);
-      },
-    );
-
-    try {
-      await ad.show(onUserEarnedReward: (ad, reward) => earned = true);
-    } catch (error) {
-      debugPrint('Rewarded show threw: $error');
-      ad.dispose();
+    final unit = unitFor('rewarded');
+    if (!adsEnabled || unit == null || !rewardedAllowed || _rewardedShowing != null) {
       return RewardedOutcome.unavailable;
     }
 
-    return completer.future.timeout(
+    if (!await _start() || !await _waitForLoad('rewarded', const Duration(seconds: 10))) {
+      return RewardedOutcome.unavailable;
+    }
+
+    final showing = _rewardedShowing = Completer<RewardedOutcome>();
+    _rewardEarned = false;
+    _ready['rewarded'] = false;
+    _placements['rewarded'] = placement;
+
+    try {
+      AppLovinMAX.showRewardedAd(unit, placement: placement);
+    } catch (error) {
+      debugPrint('Rewarded show threw: $error');
+      _finishRewarded(RewardedOutcome.unavailable);
+    }
+
+    return showing.future.timeout(
       const Duration(minutes: 5),
-      onTimeout: () =>
-          earned ? RewardedOutcome.earned : RewardedOutcome.unavailable,
+      onTimeout: () => _rewardEarned ? RewardedOutcome.earned : RewardedOutcome.unavailable,
     );
   }
 
-  // ─── App open ─────────────────────────────────────────────────────────────
-
-  /// App open is not part of the remote waterfall; it uses the build-time unit.
-  Future<void> loadAppOpen() async {
-    if (!adsEnabled || !rules.appOpenEnabled || _loadingAppOpen || _appOpen != null) {
-      return;
-    }
-
-    _loadingAppOpen = true;
-    await initialize();
-
-    try {
-      _appOpen = await _loadWaterfall<AppOpenAd>(
-        'app_open',
-        [AdConfig.appOpenAdUnitId],
-        (unitId, onLoaded, onFailed) => AppOpenAd.load(
-          adUnitId: unitId,
-          request: const AdRequest(),
-          adLoadCallback: AppOpenAdLoadCallback(
-            onAdLoaded: onLoaded,
-            onAdFailedToLoad: onFailed,
-          ),
-        ),
-      );
-    } finally {
-      _loadingAppOpen = false;
-    }
+  void _finishRewarded(RewardedOutcome outcome) {
+    final showing = _rewardedShowing;
+    _rewardedShowing = null;
+    if (showing != null && !showing.isCompleted) showing.complete(outcome);
+    _load('rewarded');
   }
+
+  // ─── App open ─────────────────────────────────────────────────────────────
 
   /// Shows the app-open ad once per session, on the first frame of the shell.
   Future<bool> maybeShowAppOpen({bool force = false}) async {
@@ -647,139 +584,93 @@ class AdService {
 
     // Respect a remote "ads off" even though the shell asks on its first frame.
     await _awaitConfig();
-    if (!adsEnabled || (!rules.appOpenEnabled && !force)) return false;
+    final unit = unitFor('app_open');
+    if (!adsEnabled || unit == null || (!rules.appOpenEnabled && !force)) return false;
+    if (!await _start()) return false;
 
-    if (_appOpen == null) await loadAppOpen();
+    // A cold start gets a short grace period for the first load, no more.
+    if (!await _waitForLoad('app_open', Duration(seconds: force ? 15 : 4))) return false;
 
-    final ad = _appOpen;
-    if (ad == null) return false;
-
-    _appOpen = null;
     _appOpenShownThisSession = true;
-
-    final completer = Completer<bool>();
-
-    ad.fullScreenContentCallback = _trackedCallback<AppOpenAd>(
-      ad,
-      force ? 'test_bench' : 'app_launch',
-      onDismissed: (ad) {
-        ad.dispose();
-        if (!completer.isCompleted) completer.complete(true);
-      },
-      onFailed: (ad, error) {
-        ad.dispose();
-        debugPrint('App open ad failed to show: ${error.message}');
-        if (!completer.isCompleted) completer.complete(false);
-      },
-    );
+    final showing = _appOpenShowing = Completer<bool>();
+    _ready['app_open'] = false;
+    _placements['app_open'] = force ? 'test_bench' : 'app_launch';
 
     try {
-      await ad.show();
+      AppLovinMAX.showAppOpenAd(unit, placement: _placements['app_open']);
     } catch (error) {
       debugPrint('App open show threw: $error');
-      ad.dispose();
-      return false;
+      _finishAppOpen(false);
     }
 
-    return completer.future.timeout(_showGuard, onTimeout: () => true);
+    return showing.future.timeout(_showGuard, onTimeout: () => true);
   }
 
-  // ─── Banner & native ──────────────────────────────────────────────────────
-
-  /// How many banner units the waterfall holds.
-  int get bannerTiers => _settings.waterfall('banner').length;
-
-  /// The banner for waterfall step [tier] (0-based). The caller owns it and
-  /// must dispose it; on a no-fill, [BannerAdBar] asks for `tier + 1`.
-  BannerAd? createBanner({
-    int tier = 0,
-    String placement = 'tab_bar',
-    VoidCallback? onLoaded,
-    VoidCallback? onFailed,
-  }) {
-    if (!adsEnabled || !rules.bannerEnabled) return null;
-
-    final units = _settings.waterfall('banner');
-    if (tier >= units.length) return null;
-
-    final unitId = units[tier];
-    void track(String event, {int? value}) => _track(
-          event,
-          'banner',
-          placement: placement,
-          unitId: unitId,
-          tier: tier + 1,
-          valueMicros: value,
-        );
-
-    track('request');
-
-    return BannerAd(
-      adUnitId: unitId,
-      size: AdSize.banner,
-      request: const AdRequest(),
-      listener: BannerAdListener(
-        onAdLoaded: (_) {
-          track('fill');
-          onLoaded?.call();
-        },
-        onAdFailedToLoad: (ad, error) {
-          debugPrint('Banner tier ${tier + 1} failed to load: ${error.message}');
-          track('no_fill');
-          ad.dispose();
-          onFailed?.call();
-        },
-        onAdImpression: (_) => track('impression'),
-        onAdClicked: (_) => track('click'),
-        onPaidEvent: (_, valueMicros, precision, currency) =>
-            track('paid', value: valueMicros.round()),
-      ),
-    );
+  void _finishAppOpen(bool shown) {
+    final showing = _appOpenShowing;
+    _appOpenShowing = null;
+    if (showing != null && !showing.isCompleted) showing.complete(shown);
   }
 
-  /// A native ad rendered with the SDK's built-in medium template, so no
-  /// platform-side factory has to be registered. Not part of the remote
-  /// waterfall; it uses the build-time unit.
-  NativeAd? createNativeAd({NativeAdListener? listener}) {
-    if (!adsEnabled) return null;
+  // ─── Banner & MREC ────────────────────────────────────────────────────────
 
-    return NativeAd(
-      adUnitId: AdConfig.nativeAdUnitId,
-      listener: listener ??
-          NativeAdListener(
-            onAdFailedToLoad: (ad, error) {
-              debugPrint('Native ad failed to load: ${error.message}');
-              ad.dispose();
-            },
-          ),
-      request: const AdRequest(),
-      nativeTemplateStyle: NativeTemplateStyle(
-        templateType: TemplateType.medium,
-        mainBackgroundColor: const Color(0xFF1B1B23),
-        cornerRadius: 14,
-        primaryTextStyle: NativeTemplateTextStyle(
-          textColor: const Color(0xFFF5F5F7),
-          style: NativeTemplateFontStyle.bold,
-          size: 14,
-        ),
-        secondaryTextStyle: NativeTemplateTextStyle(
-          textColor: const Color(0xFFA0A0AC),
-          style: NativeTemplateFontStyle.normal,
-          size: 12,
-        ),
-        tertiaryTextStyle: NativeTemplateTextStyle(
-          textColor: const Color(0xFFA0A0AC),
-          style: NativeTemplateFontStyle.normal,
-          size: 11,
-        ),
-        callToActionTextStyle: NativeTemplateTextStyle(
-          textColor: const Color(0xFFFFFFFF),
-          backgroundColor: const Color(0xFFE50914),
-          style: NativeTemplateFontStyle.bold,
-          size: 12,
-        ),
-      ),
-    );
+  /// Preloads a banner or MREC and resolves to its view id once it has
+  /// actually filled, or null (ads off, no unit, no fill, timeout). Only a
+  /// filled ad is then mounted, so an empty slot never takes up space.
+  ///
+  /// The caller owns the id and must pass it to [destroyAdView].
+  Future<AdViewId?> preloadAdView(String format, {required String placement}) async {
+    if (format == 'banner' && !rules.bannerEnabled) return null;
+
+    await _awaitConfig();
+    final unit = unitFor(format);
+    if (!adsEnabled || unit == null || !await _start()) return null;
+
+    _reporter?.track('request', format: format, placement: placement, unitId: unit, tier: 1);
+
+    AdViewId? id;
+    try {
+      id = await AppLovinMAX.preloadWidgetAdView(
+        unit,
+        format == 'mrec' ? AdFormat.mrec : AdFormat.banner,
+        placement: placement,
+      );
+    } catch (error) {
+      debugPrint('$format preload threw: $error');
+      return null;
+    }
+    if (id == null) return null;
+
+    // The load callback can beat the method-channel reply.
+    final early = _adViewResults.remove(id);
+    final filled = early ??
+        await _adViewWaiters
+            .putIfAbsent(id, Completer<bool>.new)
+            .future
+            .timeout(const Duration(seconds: 20), onTimeout: () => false);
+    _adViewWaiters.remove(id);
+
+    if (filled) return id;
+
+    unawaited(destroyAdView(id));
+    return null;
+  }
+
+  void _adViewSettled(AdViewId id, bool filled) {
+    final waiter = _adViewWaiters[id];
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete(filled);
+    } else {
+      _adViewResults[id] = filled;
+    }
+  }
+
+  Future<void> destroyAdView(AdViewId id) async {
+    try {
+      await AppLovinMAX.destroyWidgetAdView(id);
+    } catch (error) {
+      debugPrint('Destroying ad view $id failed: $error');
+    }
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

@@ -1,11 +1,11 @@
 {
-    "name": "Edu Scholar",
-    "short_name": "Edu Scholar",
+    "name": "MyanCash",
+    "short_name": "MyanCash",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#4F46E5",
-    "theme_color": "#4F46E5",
-    "description": "Edu Scholar - Scholarship Information Sharing App",
+    "background_color": "#075E1C",
+    "theme_color": "#075E1C",
+    "description": "MyanCash - Watch videos and earn real rewards",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

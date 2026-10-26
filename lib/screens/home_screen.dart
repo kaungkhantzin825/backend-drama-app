@@ -113,7 +113,7 @@ class HomeScreen extends ConsumerWidget {
 
       // One native ad in the feed. It collapses to zero height while loading
       // and when no fill arrives, so the rails below never jump.
-      const SliverToBoxAdapter(child: NativeAdCard()),
+      const SliverToBoxAdapter(child: MrecAdCard()),
 
       if (feed.latest.isNotEmpty)
         SliverToBoxAdapter(
@@ -138,18 +138,10 @@ class _Brand extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          width: 26,
-          height: 26,
-          decoration: BoxDecoration(
-            color: AppTheme.accent,
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: const Icon(Icons.play_arrow_rounded, size: 20, color: Colors.white),
-        ),
+        Image.asset('assets/images/myancash_logo.png', width: 28, height: 28),
         const SizedBox(width: 9),
         const Text(
-          'DramaLoop',
+          'MyanCash',
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 19,

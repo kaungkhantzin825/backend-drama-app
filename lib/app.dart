@@ -85,7 +85,7 @@ class _DramaLoopAppState extends ConsumerState<DramaLoopApp> with WidgetsBinding
     }
 
     return MaterialApp(
-      title: 'DramaLoop',
+      title: 'MyanCash',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
       home: home,

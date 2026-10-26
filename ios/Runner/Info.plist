@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Edu Scholar</string>
+	<string>MyanCash</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Edu Scholar</string>
+	<string>MyanCash</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -46,21 +46,19 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- AdMob: REQUIRED by Google — app crashes on iOS without this key.
-	     This is Google's public test App ID; replace with the real iOS App ID
-	     from the AdMob console before shipping (Settings > iOS Credentials in
-	     the admin panel controls the ad *unit* IDs, but this App ID itself
-	     must be declared statically here per Apple/Google's requirements). -->
-	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<!-- Ads run on AppLovin MAX; its SDK key comes from the remote config at
+	     runtime, so nothing ad-specific is declared here except tracking. -->
 
 	<!-- Required if requesting the IDFA for personalized ads (App Tracking
 	     Transparency). Shown once, the first time tracking permission is
 	     requested. -->
 	<key>NSUserTrackingUsageDescription</key>
-	<string>Your data will be used to deliver personalized ads that help keep Edu Scholar free.</string>
+	<string>Your data will be used to deliver personalized ads that help keep MyanCash free.</string>
 
-	<!-- Google's recommended SKAdNetwork IDs for AdMob ad attribution on iOS 14+. -->
+	<!-- SKAdNetwork IDs for ad attribution on iOS 14+. Before an iOS release,
+	     replace this list with AppLovin's current one for MAX + Meta, Mintegral
+	     and Unity (AppLovin docs → iOS → SKAdNetwork IDs). -->
+
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict><key>SKAdNetworkIdentifier</key><string>cstr6suwn9.skadnetwork</string></dict>

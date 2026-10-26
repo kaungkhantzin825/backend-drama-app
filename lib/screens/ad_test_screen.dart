@@ -7,16 +7,17 @@ import '../services/ad_service.dart';
 import '../widgets/ad_widgets.dart';
 import '../widgets/common.dart';
 
-/// A bench for the AdMob integration.
+/// A bench for the AppLovin MAX integration.
 ///
 /// Every format the app ships can be fired from here without hunting for the
-/// screen that triggers it, and each button prints what the SDK reported. It is
-/// the fastest way to confirm the App ID, the unit ids and the network are all
-/// wired correctly on a real device.
+/// screen that triggers it, and each button prints what the SDK reported. The
+/// Mediation debugger shows whether Meta, Mintegral and Unity initialized. It
+/// is the fastest way to confirm the SDK key, the units and the networks are
+/// all wired correctly on a real device.
 ///
-/// Reachable from Profile → AdMob test bench. Hidden behind no flag on purpose:
-/// it only renders test ads while [AdConfig.useTestAds] is true, and it is the
-/// first thing to remove when the app goes to production.
+/// Reachable from Profile → Ad test bench in debug and profile builds only:
+/// tapping live ads from a staff phone is invalid traffic, so release builds
+/// do not show the entry. Put test phones on the admin Ads page first.
 class AdTestScreen extends StatefulWidget {
   const AdTestScreen({super.key});
 
@@ -58,12 +59,21 @@ class _AdTestScreenState extends State<AdTestScreen> {
 
     return Scaffold(
       backgroundColor: AppTheme.background,
-      appBar: AppBar(title: const Text('AdMob test bench')),
+      appBar: AppBar(title: const Text('Ad test bench')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [
           _StatusCard(service: service),
           const SizedBox(height: 18),
+          _BenchTile(
+            icon: Icons.bug_report_outlined,
+            title: 'Mediation debugger',
+            subtitle: 'Shows whether each network adapter initialized',
+            onTap: _busy
+                ? null
+                : () => _run('Mediation debugger', service.showMediationDebugger),
+          ),
+          const SizedBox(height: 8),
           const SectionHeader(title: 'Full screen formats'),
           _BenchTile(
             icon: Icons.smart_display_rounded,
@@ -102,7 +112,7 @@ class _AdTestScreenState extends State<AdTestScreen> {
           const SectionHeader(title: 'In-page formats'),
           const _BannerPreview(),
           const SizedBox(height: 10),
-          const _NativePreview(),
+          const _MrecPreview(),
           const SizedBox(height: 18),
           const SectionHeader(title: 'Event log'),
           if (_log.isEmpty)
@@ -173,9 +183,13 @@ class _StatusCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
+          const _Line('SDK', 'AppLovin MAX'),
+          _Line('SDK key', service.settings.sdkKey.isEmpty ? 'missing — no ads' : 'set'),
           _Line(
-            'Mode',
-            AdConfig.useTestAds ? 'Google test units' : 'Live units',
+            'Test devices',
+            service.settings.testDeviceIds.isEmpty
+                ? 'none (live ads!)'
+                : '${service.settings.testDeviceIds.length} listed',
           ),
           _Line(
             'Config',
@@ -196,33 +210,16 @@ class _StatusCard extends StatelessWidget {
           ),
           _Line('A/B group', ClientContext.abGroup ?? 'none'),
           _Line('Initialised', service.isInitialized ? 'yes' : 'no'),
-          _Line('Rewarded cached', service.hasRewardedAd ? 'yes' : 'no'),
-          _Line('Interstitial cached', service.hasInterstitial ? 'yes' : 'no'),
-          _Line('App open cached', service.hasAppOpenAd ? 'yes' : 'no'),
+          _Line('Rewarded ready', service.hasRewardedAd ? 'yes' : 'no'),
+          _Line('Interstitial ready', service.hasInterstitial ? 'yes' : 'no'),
+          _Line('App open ready', service.hasAppOpenAd ? 'yes' : 'no'),
           const SizedBox(height: 10),
           const Text(
-            'App ID',
+            'MAX ad units',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
           ),
-          Text(
-            AdConfig.androidAppId,
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 11,
-              fontFamily: 'monospace',
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Units',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-          ),
-          // Waterfalls in the order they are tried.
-          for (final format in const ['banner', 'interstitial', 'rewarded'])
-            for (final (i, unit) in service.settings.waterfall(format).indexed)
-              _Line('${format[0].toUpperCase()}${format.substring(1)} #${i + 1}', unit, mono: true),
-          _Line('Native', AdConfig.nativeAdUnitId, mono: true),
-          _Line('App open', AdConfig.appOpenAdUnitId, mono: true),
+          for (final format in const ['banner', 'mrec', 'interstitial', 'rewarded', 'app_open'])
+            _Line(format, service.unitFor(format) ?? '— not set', mono: true),
         ],
       ),
     );
@@ -332,7 +329,7 @@ class _BannerPreview extends StatelessWidget {
       child: const Column(
         children: [
           Text(
-            'Banner · 320×50',
+            'Banner · adaptive',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
           ),
           SizedBox(height: 8),
@@ -343,8 +340,8 @@ class _BannerPreview extends StatelessWidget {
   }
 }
 
-class _NativePreview extends StatelessWidget {
-  const _NativePreview();
+class _MrecPreview extends StatelessWidget {
+  const _MrecPreview();
 
   @override
   Widget build(BuildContext context) {
@@ -360,11 +357,11 @@ class _NativePreview extends StatelessWidget {
           Padding(
             padding: EdgeInsets.only(top: 10),
             child: Text(
-              'Native advanced · medium template',
+              'MREC · 300×250',
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
             ),
           ),
-          NativeAdCard(),
+          MrecAdCard(placement: 'test_bench'),
         ],
       ),
     );

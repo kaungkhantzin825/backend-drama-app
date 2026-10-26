@@ -3,52 +3,58 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  // `waterfall()` picks the running platform; pin it so the tests are stable.
+  // `unit()` picks the running platform; pin it so the tests are stable.
   setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.android);
   tearDown(() => debugDefaultTargetPlatformOverride = null);
 
   Map<String, dynamic> payload() => {
         'is_ads_enabled': true,
-        'ad_provider': 'admob',
+        'ad_provider': 'applovin_max',
+        'applovin_sdk_key': 'sdk-key-123',
+        'ad_test_device_ids': ['38400000-8cf0-11bd-b23e-10b96e40000d', ' '],
         'ad_interval_seconds': 90,
-        'ad_load_timeout_seconds': 4,
         'config_version': 'abc123',
         'ad_units': {
           'android': {
             'interstitial': [
-              {'unit_id': 'ca-app-pub-1/high', 'label': 'High floor'},
-              {'unit_id': 'ca-app-pub-1/low', 'label': 'Fallback'},
+              {'unit_id': 'a1b2c3d4e5f60789', 'label': null},
+            ],
+            'mrec': [
+              {'unit_id': 'f1e2d3c4b5a60789', 'label': null},
             ],
             'banner': [],
           },
           'ios': {
             'interstitial': [
-              {'unit_id': 'ca-app-pub-1/ios', 'label': null},
+              {'unit_id': 'c0ffee00c0ffee00', 'label': null},
             ],
           },
         },
       };
 
-  test('AdSettings keeps the waterfall in server order', () {
+  test('AdSettings reads the MAX key, test devices and one unit per format', () {
     final settings = AdSettings.fromJson(payload());
 
-    expect(settings.waterfall('interstitial'), ['ca-app-pub-1/high', 'ca-app-pub-1/low']);
+    expect(settings.sdkKey, 'sdk-key-123');
+    expect(settings.testDeviceIds, ['38400000-8cf0-11bd-b23e-10b96e40000d']);
+    expect(settings.unit('interstitial'), 'a1b2c3d4e5f60789');
+    expect(settings.unit('mrec'), 'f1e2d3c4b5a60789');
     expect(settings.interval, const Duration(seconds: 90));
-    expect(settings.loadTimeout, const Duration(seconds: 4));
     expect(settings.isRemote, isTrue);
   });
 
-  test('AdSettings picks the iOS waterfall on iOS', () {
+  test('AdSettings picks the iOS unit on iOS', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
 
-    expect(AdSettings.fromJson(payload()).waterfall('interstitial'), ['ca-app-pub-1/ios']);
+    expect(AdSettings.fromJson(payload()).unit('interstitial'), 'c0ffee00c0ffee00');
   });
 
   test('AdSettings treats an empty or missing format as "do not show"', () {
     final settings = AdSettings.fromJson(payload());
 
-    expect(settings.waterfall('banner'), isEmpty);
-    expect(settings.waterfall('rewarded'), isEmpty);
+    expect(settings.unit('banner'), isNull);
+    expect(settings.unit('rewarded'), isNull);
+    expect(settings.unit('app_open'), isNull);
   });
 
   test('AdSettings respects the remote kill switch', () {
@@ -57,13 +63,21 @@ void main() {
     expect(settings.enabled, isFalse);
   });
 
-  test('AdSettings fallback has one build-time unit per format', () {
+  test('An old payload without a MAX key leaves ads unable to start', () {
+    final settings = AdSettings.fromJson(const {'is_ads_enabled': true});
+
+    expect(settings.sdkKey, isEmpty);
+    expect(settings.testDeviceIds, isEmpty);
+    expect(settings.unit('interstitial'), isNull);
+  });
+
+  test('AdSettings fallback uses only build-time values (none by default)', () {
     final settings = AdSettings.fallback();
 
     expect(settings.isRemote, isFalse);
     expect(settings.enabled, isTrue);
-    for (final format in ['banner', 'interstitial', 'rewarded']) {
-      expect(settings.waterfall(format), hasLength(1));
-    }
+    // No --dart-define in tests: no key, no units.
+    expect(settings.sdkKey, isEmpty);
+    expect(settings.unit('interstitial'), isNull);
   });
 }

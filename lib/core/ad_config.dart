@@ -1,82 +1,55 @@
 import 'package:flutter/foundation.dart';
 
-/// AdMob configuration.
+/// Build-time AppLovin MAX settings.
 ///
-/// Every default here is one of Google's published **test** ad units, so the
-/// app can be built and exercised end to end without an AdMob account. Test ads
-/// always carry a "Test Ad" label and are never billed — they exist precisely
-/// so a format can be verified before a real unit is created.
-///
-/// To ship with real inventory, create the units in the AdMob console and build
-/// with the defines below. Any unit left empty falls back to the test id, so a
-/// half-configured build still runs instead of crashing on an empty ad unit.
+/// The backend normally supplies the SDK key, the ad units and the test
+/// devices (`GET /api/v1/app-config`, edited on the admin Ads page). These
+/// defines are only the fallback for a launch where that config cannot be
+/// fetched. MAX has no public test units: with nothing configured, the app
+/// simply shows no ads.
 ///
 /// ```sh
-/// flutter build apk --dart-define=USE_TEST_ADS=false \
-///   --dart-define=ADMOB_BANNER=ca-app-pub-XXXXXXXX/YYYYYYYY \
-///   --dart-define=ADMOB_INTERSTITIAL=ca-app-pub-XXXXXXXX/YYYYYYYY \
-///   --dart-define=ADMOB_REWARDED=ca-app-pub-XXXXXXXX/YYYYYYYY \
-///   --dart-define=ADMOB_NATIVE=ca-app-pub-XXXXXXXX/YYYYYYYY \
-///   --dart-define=ADMOB_APP_OPEN=ca-app-pub-XXXXXXXX/YYYYYYYY
+/// flutter build apk \
+///   --dart-define=APPLOVIN_SDK_KEY=YOUR_SDK_KEY \
+///   --dart-define=MAX_BANNER=xxxxxxxxxxxxxxxx \
+///   --dart-define=MAX_MREC=xxxxxxxxxxxxxxxx \
+///   --dart-define=MAX_INTERSTITIAL=xxxxxxxxxxxxxxxx \
+///   --dart-define=MAX_REWARDED=xxxxxxxxxxxxxxxx \
+///   --dart-define=MAX_APP_OPEN=xxxxxxxxxxxxxxxx
 /// ```
 ///
-/// To silence the "test ad" warning on a physical device, pass your own device
-/// hash: `--dart-define=AD_TEST_DEVICE_IDS=ABCDEF1234567890`.
+/// Test mode on a phone: add its advertising id (GAID / IDFA) on the admin Ads
+/// page, or `--dart-define=AD_TEST_DEVICE_IDS=id1,id2`.
 class AdConfig {
   const AdConfig._();
 
-  // ─── App ids ──────────────────────────────────────────────────────────────
-  // Must match the `com.google.android.gms.ads.APPLICATION_ID` meta-data in
-  // AndroidManifest.xml, or the SDK aborts on launch.
+  static const String sdkKey = String.fromEnvironment('APPLOVIN_SDK_KEY');
 
-  static const String androidAppId = 'ca-app-pub-3940256099942544~3347511713';
-
-  /// Kept for an eventual iOS target; unused until an iOS runner exists.
-  static const String iosAppId = 'ca-app-pub-3940256099942544~1458002511';
-
-  // ─── Test ad units ────────────────────────────────────────────────────────
-
-  static const String _testBanner = 'ca-app-pub-3940256099942544/6300978111';
-  static const String _testInterstitial = 'ca-app-pub-3940256099942544/1033173712';
-  static const String _testRewarded = 'ca-app-pub-3940256099942544/5224354917';
-  static const String _testNative = 'ca-app-pub-3940256099942544/2247696110';
-  static const String _testAppOpen = 'ca-app-pub-3940256099942544/9257395921';
-
-  // ─── Live ad units (empty until the console issues them) ──────────────────
-
-  static const String _liveBanner = String.fromEnvironment('ADMOB_BANNER');
-  static const String _liveInterstitial =
-      String.fromEnvironment('ADMOB_INTERSTITIAL');
-  static const String _liveRewarded = String.fromEnvironment('ADMOB_REWARDED');
-  static const String _liveNative = String.fromEnvironment('ADMOB_NATIVE');
-  static const String _liveAppOpen = String.fromEnvironment('ADMOB_APP_OPEN');
-
-  /// When true every placement resolves to a Google test unit.
-  static const bool useTestAds =
-      bool.fromEnvironment('USE_TEST_ADS', defaultValue: true);
+  static const Map<String, String> _units = {
+    'banner': String.fromEnvironment('MAX_BANNER'),
+    'mrec': String.fromEnvironment('MAX_MREC'),
+    'interstitial': String.fromEnvironment('MAX_INTERSTITIAL'),
+    'rewarded': String.fromEnvironment('MAX_REWARDED'),
+    'app_open': String.fromEnvironment('MAX_APP_OPEN'),
+  };
 
   static const String _testDeviceIds =
       String.fromEnvironment('AD_TEST_DEVICE_IDS');
 
-  static String get bannerAdUnitId => _pick(_liveBanner, _testBanner);
+  /// format → unit id, only the formats that were defined.
+  static Map<String, String> get units => {
+        for (final entry in _units.entries)
+          if (entry.value.isNotEmpty) entry.key: entry.value,
+      };
 
-  static String get interstitialAdUnitId =>
-      _pick(_liveInterstitial, _testInterstitial);
-
-  static String get rewardedAdUnitId => _pick(_liveRewarded, _testRewarded);
-
-  static String get nativeAdUnitId => _pick(_liveNative, _testNative);
-
-  static String get appOpenAdUnitId => _pick(_liveAppOpen, _testAppOpen);
-
-  /// Test device hashes, comma separated in the define.
+  /// Test device advertising ids, comma separated in the define.
   static List<String> get testDeviceIds => _testDeviceIds
       .split(',')
       .map((id) => id.trim())
       .where((id) => id.isNotEmpty)
       .toList(growable: false);
 
-  /// The mobile SDK has no web or desktop implementation, so every ad call is
+  /// The MAX SDK has no web or desktop implementation, so every ad call is
   /// short-circuited outside Android/iOS rather than throwing a missing-plugin
   /// error into the UI.
   static bool get isSupported {
@@ -85,7 +58,4 @@ class AdConfig {
     return defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
   }
-
-  static String _pick(String live, String test) =>
-      useTestAds || live.isEmpty ? test : live;
 }

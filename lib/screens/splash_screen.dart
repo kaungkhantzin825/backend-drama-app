@@ -25,24 +25,23 @@ class SplashScreen extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 72,
-                height: 72,
+                width: 96,
+                height: 96,
                 decoration: BoxDecoration(
-                  color: AppTheme.accent,
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
-                      color: AppTheme.accent.withValues(alpha: 0.35),
+                      color: const Color(0xFF2ED47A).withValues(alpha: 0.30),
                       blurRadius: 30,
                       spreadRadius: 2,
                     ),
                   ],
                 ),
-                child: const Icon(Icons.play_arrow_rounded, size: 44, color: Colors.white),
+                child: Image.asset('assets/images/myancash_logo.png'),
               ),
               const SizedBox(height: 20),
               const Text(
-                'DramaLoop',
+                'MyanCash',
                 style: TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 26,

@@ -3,20 +3,19 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Keeps playback alive when the screen locks mid-episode. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <!-- Read by the Google Mobile Ads SDK to pick ad creative for the network. -->
+    <!-- Read by AppLovin MAX and the mediated networks to pick ad creative
+         for the connection type. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
+    <!-- networkSecurityConfig: lets Meta Audience Network cache video ads
+         through 127.0.0.1 (see res/xml/network_security_config.xml). The
+         AppLovin MAX SDK key is not set here; the app passes it at runtime
+         from the remote config. -->
     <application
-        android:label="DramaLoop"
+        android:label="MyanCash"
         android:name="${applicationName}"
-        android:icon="@mipmap/launcher_icon">
-        <!-- AdMob application id. The SDK aborts on launch when this is missing
-             or does not match the ad units being requested. This is Google's
-             public TEST id; swap it for the live one at the same time as
-             --dart-define=USE_TEST_ADS=false. -->
-        <meta-data
-            android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713"/>
+        android:icon="@mipmap/launcher_icon"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"

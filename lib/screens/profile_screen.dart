@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -129,35 +130,39 @@ class ProfileScreen extends ConsumerWidget {
               const Divider(),
               _SettingRow(
                 icon: Icons.info_outline_rounded,
-                label: 'About DramaLoop',
+                label: 'About MyanCash',
                 trailing: const Text(
                   'v1.0.0',
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
                 ),
                 onTap: () => showAboutDialog(
                   context: context,
-                  applicationName: 'DramaLoop',
+                  applicationName: 'MyanCash',
                   applicationVersion: '1.0.0',
                   applicationLegalese: 'Short dramas, one minute at a time.',
                 ),
               ),
-              const Divider(),
-              _SettingRow(
-                icon: Icons.bug_report_outlined,
-                label: 'AdMob test bench',
-                trailing: const Text(
-                  'TEST',
-                  style: TextStyle(
-                    color: AppTheme.gold,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.6,
+              // Staff tapping live ads is invalid traffic, so release builds
+              // (what users install) never show the bench.
+              if (!kReleaseMode) ...[
+                const Divider(),
+                _SettingRow(
+                  icon: Icons.bug_report_outlined,
+                  label: 'Ad test bench',
+                  trailing: const Text(
+                    'TEST',
+                    style: TextStyle(
+                      color: AppTheme.gold,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AdTestScreen()),
                   ),
                 ),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AdTestScreen()),
-                ),
-              ),
+              ],
             ],
           ),
           const SizedBox(height: 20),

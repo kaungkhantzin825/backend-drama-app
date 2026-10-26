@@ -40,7 +40,7 @@ class UpdateRequiredScreen extends StatelessWidget {
     return _GateScaffold(
       icon: Icons.system_update_rounded,
       title: 'Update required',
-      message: '${release.updateMessage.isEmpty ? 'This version of DramaLoop is no longer supported.' : release.updateMessage}\n\n'
+      message: '${release.updateMessage.isEmpty ? 'This version of MyanCash is no longer supported.' : release.updateMessage}\n\n'
           'You have ${ClientContext.appVersion}; version ${release.minSupported} or newer is needed.',
       action: FilledButton(
         onPressed: release.updateUrl.isEmpty ? null : () => openStore(context, release.updateUrl),
@@ -58,7 +58,7 @@ Future<void> showOptionalUpdateDialog(BuildContext context, ReleasePolicy releas
       backgroundColor: AppTheme.surface,
       title: const Text('Update available'),
       content: Text(
-        '${release.updateMessage.isEmpty ? 'A new version of DramaLoop is available.' : release.updateMessage}\n\n'
+        '${release.updateMessage.isEmpty ? 'A new version of MyanCash is available.' : release.updateMessage}\n\n'
         'Version ${release.latest} — you have ${ClientContext.appVersion}.',
         style: const TextStyle(color: AppTheme.textSecondary, height: 1.4),
       ),
