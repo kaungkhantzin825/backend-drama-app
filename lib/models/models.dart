@@ -181,12 +181,15 @@ class DramaDetail {
 /// carries on from one video to the next instead of starting over.
 class WatchReward {
   const WatchReward({
+    this.enabled = true,
     this.seconds = 0,
     this.intervalSeconds = 60,
     this.pointsPerInterval = 1,
     this.capped = false,
   });
 
+  /// Watch rewards switched on by the admin. Off: the player shows no ring.
+  final bool enabled;
   final int seconds;
   final int intervalSeconds;
   final int pointsPerInterval;
@@ -195,10 +198,40 @@ class WatchReward {
   final bool capped;
 
   factory WatchReward.fromJson(Map<String, dynamic> json) => WatchReward(
+        enabled: api.as<bool>(json, 'enabled', true),
         seconds: api.as<int>(json, 'seconds', 0),
         intervalSeconds: api.as<int>(json, 'interval_seconds', 60),
         pointsPerInterval: api.as<int>(json, 'points_per_interval', 1),
         capped: api.as<bool>(json, 'capped', false),
+      );
+}
+
+/// A way to be paid (KBZPay, WavePay, PayPal…), as set up by the admin.
+class PayoutMethod {
+  const PayoutMethod({
+    required this.code,
+    required this.name,
+    required this.accountLabel,
+    this.accountHint = '',
+    this.input = 'text',
+  });
+
+  final String code;
+  final String name;
+
+  /// Label for the account field, e.g. "KBZPay phone number".
+  final String accountLabel;
+  final String accountHint;
+
+  /// "phone", "email" or "text" — picks the keyboard and the validation.
+  final String input;
+
+  factory PayoutMethod.fromJson(Map<String, dynamic> json) => PayoutMethod(
+        code: api.as<String>(json, 'code', ''),
+        name: api.as<String>(json, 'name', ''),
+        accountLabel: api.as<String>(json, 'account_label', 'Account'),
+        accountHint: api.as<String>(json, 'account_hint', ''),
+        input: api.as<String>(json, 'input', 'text'),
       );
 }
 
@@ -218,7 +251,10 @@ class Wallet {
     required this.adRewardPoints,
     required this.adsClaimedToday,
     required this.dailyAdLimit,
+    this.checkInEnabled = true,
+    this.adRewardEnabled = true,
     this.watchReward = const WatchReward(),
+    this.payoutMethods = const [],
   });
 
   final int pointsBalance;
@@ -234,7 +270,15 @@ class Wallet {
   final int adRewardPoints;
   final int adsClaimedToday;
   final int dailyAdLimit;
+
+  /// Switched off by the admin: the wallet hides the row.
+  final bool checkInEnabled;
+  final bool adRewardEnabled;
+
   final WatchReward watchReward;
+
+  /// The methods a user may cash out with, in the admin's order.
+  final List<PayoutMethod> payoutMethods;
 
   int get adsRemainingToday {
     final remaining = dailyAdLimit - adsClaimedToday;
@@ -267,9 +311,17 @@ class Wallet {
         adRewardPoints: api.as<int>(json, 'ad_reward_points', 10),
         adsClaimedToday: api.as<int>(json, 'ads_claimed_today', 0),
         dailyAdLimit: api.as<int>(json, 'daily_ad_limit', 20),
+        checkInEnabled: api.as<bool>(json, 'check_in_enabled', true),
+        adRewardEnabled: api.as<bool>(json, 'ad_reward_enabled', true),
         watchReward: json['watch_reward'] is Map
             ? WatchReward.fromJson(Map<String, dynamic>.from(json['watch_reward'] as Map))
             : const WatchReward(),
+        payoutMethods: (json['payout_methods'] as List?)
+                ?.whereType<Map>()
+                .map((e) => PayoutMethod.fromJson(Map<String, dynamic>.from(e)))
+                .where((m) => m.code.isNotEmpty)
+                .toList() ??
+            const [],
       );
 }
 
@@ -316,6 +368,7 @@ class Withdrawal {
     required this.method,
     required this.status,
     required this.statusLabel,
+    this.methodName,
     this.adminNote,
     this.createdAt,
   });
@@ -325,6 +378,9 @@ class Withdrawal {
   final String amount;
   final String currency;
   final String method;
+
+  /// e.g. "KBZPay"; null from older servers.
+  final String? methodName;
   final String status;
   final String statusLabel;
   final String? adminNote;
@@ -336,6 +392,7 @@ class Withdrawal {
         amount: api.as<String>(json, 'amount', '0.00'),
         currency: api.as<String>(json, 'currency', 'USD'),
         method: api.as<String>(json, 'method', 'paypal'),
+        methodName: json['method_name'] as String?,
         status: api.as<String>(json, 'status', 'pending'),
         statusLabel: api.as<String>(json, 'status_label', 'Pending'),
         adminNote: json['admin_note'] as String?,
@@ -503,6 +560,7 @@ class LuckyWheelState {
     required this.dailyLimit,
     required this.spinsRemaining,
     required this.spinsUsedToday,
+    this.enabled = true,
   });
 
   final List<WheelSegment> segments;
@@ -510,9 +568,13 @@ class LuckyWheelState {
   final int spinsRemaining;
   final int spinsUsedToday;
 
-  bool get canSpin => spinsRemaining > 0 && segments.isNotEmpty;
+  /// Closed by the admin.
+  final bool enabled;
+
+  bool get canSpin => enabled && spinsRemaining > 0 && segments.isNotEmpty;
 
   factory LuckyWheelState.fromJson(Map<String, dynamic> json) => LuckyWheelState(
+        enabled: api.as<bool>(json, 'enabled', true),
         segments: json['segments'] is List
             ? (json['segments'] as List)
                 .whereType<Map>()

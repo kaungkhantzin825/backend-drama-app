@@ -23,6 +23,8 @@ class LuckyWheelScreen extends ConsumerStatefulWidget {
 
 class _LuckyWheelScreenState extends ConsumerState<LuckyWheelScreen>
     with SingleTickerProviderStateMixin {
+  /// One colour per slice; 12 to match the admin's prize limit, so no two
+  /// neighbouring slices share a colour.
   static const _palette = [
     Color(0xFF7B2FF7),
     Color(0xFF00C2FF),
@@ -30,6 +32,12 @@ class _LuckyWheelScreenState extends ConsumerState<LuckyWheelScreen>
     Color(0xFFFFC145),
     Color(0xFFFF6B6B),
     Color(0xFFFF4FA3),
+    Color(0xFF3D7BFF),
+    Color(0xFF14B8A6),
+    Color(0xFFA3E635),
+    Color(0xFFFF8A3D),
+    Color(0xFFE040FB),
+    Color(0xFF26C6DA),
   ];
 
   late final AnimationController _spinController;
@@ -178,9 +186,11 @@ class _LuckyWheelScreenState extends ConsumerState<LuckyWheelScreen>
                       label: Text(
                         _spinning
                             ? 'Spinning…'
-                            : state.canSpin
-                                ? 'Spin the Wheel'
-                                : 'Come back tomorrow',
+                            : !state.enabled
+                                ? 'The wheel is closed right now'
+                                : state.canSpin
+                                    ? 'Spin the Wheel'
+                                    : 'Come back tomorrow',
                         style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w800,

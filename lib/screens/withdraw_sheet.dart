@@ -10,8 +10,10 @@ import '../widgets/common.dart';
 
 /// The cash-out form.
 ///
-/// The payout destination is validated per method, because an approved request
-/// with no destination is unpayable and would stall the admin queue.
+/// The payment methods (KBZPay, WavePay, PayPal…) come from the admin's
+/// settings. Every method asks for the account holder name plus one account
+/// field, because an approved request with no destination is unpayable and
+/// would stall the admin queue.
 class WithdrawSheet extends ConsumerStatefulWidget {
   const WithdrawSheet({super.key, required this.wallet});
 
@@ -23,42 +25,33 @@ class WithdrawSheet extends ConsumerStatefulWidget {
 
 class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
   final _formKey = GlobalKey<FormState>();
-  final _email = TextEditingController();
   final _accountName = TextEditingController();
   final _accountNumber = TextEditingController();
 
-  String _method = 'paypal';
+  late PayoutMethod? _method =
+      widget.wallet.payoutMethods.isEmpty ? null : widget.wallet.payoutMethods.first;
   bool _submitting = false;
 
   @override
   void dispose() {
-    _email.dispose();
     _accountName.dispose();
     _accountNumber.dispose();
     super.dispose();
   }
 
-  Map<String, dynamic> _accountDetails() {
-    return switch (_method) {
-      'paypal' => {'email': _email.text.trim()},
-      'bank' => {
-          'account_name': _accountName.text.trim(),
-          'account_number': _accountNumber.text.trim(),
-        },
-      // Gift cards are fulfilled manually, so no destination is needed up front.
-      _ => <String, dynamic>{},
-    };
-  }
-
   Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final method = _method;
+    if (method == null || !(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _submitting = true);
 
     try {
       final withdrawal = await ref.read(walletApiProvider).requestWithdrawal(
-            method: _method,
-            accountDetails: _accountDetails(),
+            method: method.code,
+            accountDetails: {
+              'account_name': _accountName.text.trim(),
+              'account_number': _accountNumber.text.trim(),
+            },
           );
 
       if (!mounted) return;
@@ -173,45 +166,47 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
                 ),
               ),
               const SizedBox(height: 8),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'paypal', label: Text('PayPal'), icon: Icon(Icons.mail_outline, size: 15)),
-                  ButtonSegment(value: 'bank', label: Text('Bank'), icon: Icon(Icons.account_balance_outlined, size: 15)),
-                  ButtonSegment(value: 'giftcard', label: Text('Gift card'), icon: Icon(Icons.card_giftcard_outlined, size: 15)),
-                ],
-                selected: {_method},
-                showSelectedIcon: false,
-                style: ButtonStyle(
-                  backgroundColor: WidgetStateProperty.resolveWith(
-                    (states) => states.contains(WidgetState.selected)
-                        ? AppTheme.accent.withValues(alpha: 0.18)
-                        : AppTheme.surfaceHigh,
-                  ),
-                  foregroundColor: WidgetStateProperty.resolveWith(
-                    (states) => states.contains(WidgetState.selected)
-                        ? AppTheme.accent
-                        : AppTheme.textSecondary,
-                  ),
-                  side: WidgetStateProperty.resolveWith(
-                    (states) => BorderSide(
-                      color: states.contains(WidgetState.selected)
-                          ? AppTheme.accent.withValues(alpha: 0.5)
-                          : AppTheme.divider,
-                    ),
-                  ),
-                  textStyle: const WidgetStatePropertyAll(
-                    TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                  ),
+              if (_method == null)
+                const Text(
+                  'Cash out is not available right now. Please try again later.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12.5),
+                )
+              else ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final method in wallet.payoutMethods)
+                      ChoiceChip(
+                        label: Text(method.name),
+                        selected: method.code == _method?.code,
+                        showCheckmark: false,
+                        selectedColor: AppTheme.accent.withValues(alpha: 0.18),
+                        backgroundColor: AppTheme.surfaceHigh,
+                        side: BorderSide(
+                          color: method.code == _method?.code
+                              ? AppTheme.accent.withValues(alpha: 0.5)
+                              : AppTheme.divider,
+                        ),
+                        labelStyle: TextStyle(
+                          color: method.code == _method?.code
+                              ? AppTheme.accent
+                              : AppTheme.textSecondary,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        onSelected: (_) => setState(() => _method = method),
+                      ),
+                  ],
                 ),
-                onSelectionChanged: (selection) => setState(() => _method = selection.first),
-              ),
-              const SizedBox(height: 16),
-              ..._methodFields(),
+                const SizedBox(height: 16),
+                ..._methodFields(_method!),
+              ],
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
-                  onPressed: _submitting ? null : _submit,
+                  onPressed: _submitting || _method == null ? null : _submit,
                   child: _submitting
                       ? const SizedBox(
                           width: 18,
@@ -233,64 +228,37 @@ class _WithdrawSheetState extends ConsumerState<WithdrawSheet> {
     );
   }
 
-  List<Widget> _methodFields() {
-    switch (_method) {
-      case 'paypal':
-        return [
-          _field(
-            controller: _email,
-            label: 'PayPal email',
-            hint: 'you@example.com',
-            keyboardType: TextInputType.emailAddress,
-            validator: (value) {
-              final text = value?.trim() ?? '';
-              if (text.isEmpty) return 'A PayPal email is required.';
-              if (!text.contains('@') || !text.contains('.')) return 'Enter a valid email address.';
-              return null;
-            },
-          ),
-        ];
-      case 'bank':
-        return [
-          _field(
-            controller: _accountName,
-            label: 'Account holder name',
-            hint: 'As printed on the account',
-            validator: (value) =>
-                (value?.trim().isEmpty ?? true) ? 'An account name is required.' : null,
-          ),
-          const SizedBox(height: 12),
-          _field(
-            controller: _accountNumber,
-            label: 'Account number / IBAN',
-            hint: 'Your account number',
-            validator: (value) =>
-                (value?.trim().isEmpty ?? true) ? 'An account number is required.' : null,
-          ),
-        ];
-      default:
-        return [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceHigh,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.gold),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'A digital gift card code is sent to your account email after approval.',
-                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ];
-    }
+  List<Widget> _methodFields(PayoutMethod method) {
+    final isEmail = method.input == 'email';
+
+    return [
+      _field(
+        controller: _accountName,
+        label: 'Account holder name',
+        hint: 'Name on your ${method.name} account',
+        validator: (value) =>
+            (value?.trim().isEmpty ?? true) ? 'Enter the account holder name.' : null,
+      ),
+      const SizedBox(height: 12),
+      _field(
+        controller: _accountNumber,
+        label: method.accountLabel,
+        hint: method.accountHint,
+        keyboardType: switch (method.input) {
+          'email' => TextInputType.emailAddress,
+          'phone' => TextInputType.phone,
+          _ => TextInputType.text,
+        },
+        validator: (value) {
+          final text = value?.trim() ?? '';
+          if (text.isEmpty) return 'Enter your ${method.accountLabel.toLowerCase()}.';
+          if (isEmail && (!text.contains('@') || !text.contains('.'))) {
+            return 'Enter a valid email address.';
+          }
+          return null;
+        },
+      ),
+    ];
   }
 
   Widget _field({

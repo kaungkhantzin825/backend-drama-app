@@ -37,6 +37,15 @@ void main() {
     expect(read().seconds, 23);
   });
 
+  test('a switched-off meter does not tick', () {
+    meter.sync(const WatchReward(enabled: false, seconds: 30, intervalSeconds: 60));
+
+    meter.tick();
+
+    expect(read().enabled, isFalse);
+    expect(read().seconds, 0);
+  });
+
   test('a capped meter stays empty and does not tick', () {
     meter.sync(const WatchReward(seconds: 40, intervalSeconds: 60, capped: true));
 

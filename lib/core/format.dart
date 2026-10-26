@@ -28,16 +28,26 @@ class Fmt {
     return '${value < 0 ? '-' : ''}$buffer';
   }
 
-  /// 2.5 → "$2.50".
-  static String cash(double amount, {String currency = 'USD'}) {
-    final symbol = switch (currency) {
-      'USD' => r'$',
-      'EUR' => '€',
-      'GBP' => '£',
-      _ => '$currency ',
-    };
+  /// Currencies paid out in whole units only (matches the backend).
+  static const _zeroDecimal = {'MMK', 'JPY', 'KRW', 'VND', 'IDR'};
 
-    return '$symbol${amount.toStringAsFixed(2)}';
+  /// 2.5 → "$2.50", 1234.5 → "$1,234.50"; 5000 MMK → "5,000 MMK".
+  static String cash(double amount, {String currency = 'USD'}) {
+    final code = currency.toUpperCase();
+    final whole = _zeroDecimal.contains(code);
+    final rounded = whole ? amount.roundToDouble() : amount;
+
+    final fixed = rounded.abs().toStringAsFixed(whole ? 0 : 2);
+    final parts = fixed.split('.');
+    final number = '${amount < 0 ? '-' : ''}${withThousands(int.parse(parts[0]))}'
+        '${parts.length > 1 ? '.${parts[1]}' : ''}';
+
+    return switch (code) {
+      'USD' => '\$$number',
+      'EUR' => '€$number',
+      'GBP' => '£$number',
+      _ => '$number $code',
+    };
   }
 
   /// 95 seconds → "1:35".

@@ -369,7 +369,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   key: ValueKey(video.id),
                   video: video,
                   isActive: index == _index && !_adBreak,
-                  reward: index == _index ? meter : null,
+                  // No ring at all when the admin has switched watch rewards off.
+                  reward: index == _index && meter.enabled ? meter : null,
                   earnedThisSession: _earnedThisSession,
                   onShare: () => _share(video),
                   onFavorite: () => _toggleFavorite(video),

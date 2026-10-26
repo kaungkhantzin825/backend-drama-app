@@ -7,6 +7,7 @@ import '../models/models.dart';
 import '../state/providers.dart';
 import '../widgets/common.dart';
 import 'ad_test_screen.dart';
+import 'feedback_screen.dart';
 import 'library_screen.dart';
 import 'wallet_screen.dart';
 
@@ -115,6 +116,14 @@ class ProfileScreen extends ConsumerWidget {
                 label: 'Rewards & cash out',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const WalletScreen()),
+                ),
+              ),
+              const Divider(),
+              _SettingRow(
+                icon: Icons.feedback_outlined,
+                label: 'Send feedback',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const FeedbackScreen()),
                 ),
               ),
               const Divider(),
@@ -263,7 +272,7 @@ class _WithdrawalRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${Fmt.cash(double.tryParse(item.amount) ?? 0, currency: item.currency)} · ${_methodLabel(item.method)}',
+                  '${Fmt.cash(double.tryParse(item.amount) ?? 0, currency: item.currency)} · ${item.methodName ?? _methodLabel(item.method)}',
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 14,

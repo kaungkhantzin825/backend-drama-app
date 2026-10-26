@@ -11,6 +11,7 @@ import '../services/ad_traffic_reporter.dart';
 import '../services/app_config_api.dart';
 import '../services/auth_service.dart';
 import '../services/content_service.dart';
+import '../services/feedback_api.dart';
 import '../services/library_api.dart';
 import '../services/notification_api.dart';
 import '../services/wallet_api.dart';
@@ -50,6 +51,18 @@ final libraryApiProvider = Provider<LibraryApi>((ref) {
 
 final wheelApiProvider = Provider<WheelApi>((ref) {
   return WheelApi(ref.watch(apiClientProvider));
+});
+
+final feedbackApiProvider = Provider<FeedbackApi>((ref) {
+  return FeedbackApi(ref.watch(apiClientProvider));
+});
+
+final feedbackCategoriesProvider = FutureProvider<List<FeedbackCategory>>((ref) async {
+  try {
+    return await ref.watch(feedbackApiProvider).categories();
+  } on Exception {
+    return FeedbackApi.fallbackCategories;
+  }
 });
 
 final appConfigApiProvider = Provider<AppConfigApi>((ref) {
@@ -279,7 +292,7 @@ class WatchMeterController extends Notifier<WatchReward> {
 
   /// One second of playback.
   void tick() {
-    if (state.capped) return;
+    if (state.capped || !state.enabled) return;
 
     final interval = state.intervalSeconds > 0 ? state.intervalSeconds : 60;
     state = WatchReward(
@@ -296,8 +309,10 @@ class WatchMeterController extends Notifier<WatchReward> {
     _synced = true;
 
     final interval = server.intervalSeconds > 0 ? server.intervalSeconds : 60;
+    final idle = server.capped || !server.enabled;
     state = WatchReward(
-      seconds: server.capped ? 0 : (server.seconds + unreportedSeconds) % interval,
+      enabled: server.enabled,
+      seconds: idle ? 0 : (server.seconds + unreportedSeconds) % interval,
       intervalSeconds: interval,
       pointsPerInterval: server.pointsPerInterval,
       capped: server.capped,

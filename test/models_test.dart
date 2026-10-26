@@ -25,6 +25,13 @@ void main() {
       expect(Fmt.cash(2.5), r'$2.50');
       expect(Fmt.cash(0), r'$0.00');
       expect(Fmt.cash(12.345), r'$12.35');
+      expect(Fmt.cash(1234.5), r'$1,234.50');
+    });
+
+    test('formats whole-unit currencies like MMK without decimals', () {
+      expect(Fmt.cash(5000, currency: 'MMK'), '5,000 MMK');
+      expect(Fmt.cash(1250.6, currency: 'mmk'), '1,251 MMK');
+      expect(Fmt.cash(3.5, currency: 'THB'), '3.50 THB');
     });
 
     test('formats video durations', () {
@@ -90,6 +97,32 @@ void main() {
       expect(wallet.watchReward.intervalSeconds, 60);
       expect(wallet.watchReward.pointsPerInterval, 1);
       expect(wallet.watchReward.capped, isFalse);
+    });
+
+    test('parses the admin switches and payment methods', () {
+      final wallet = Wallet.fromJson({
+        'points_balance': 10,
+        'currency': 'MMK',
+        'check_in_enabled': false,
+        'ad_reward_enabled': true,
+        'payout_methods': [
+          {
+            'code': 'kbzpay',
+            'name': 'KBZPay',
+            'account_label': 'KBZPay phone number',
+            'account_hint': '09xxxxxxxxx',
+            'input': 'phone',
+          },
+          {'code': '', 'name': 'Broken'},
+        ],
+      });
+
+      expect(wallet.currency, 'MMK');
+      expect(wallet.checkInEnabled, isFalse);
+      expect(wallet.adRewardEnabled, isTrue);
+      expect(wallet.payoutMethods, hasLength(1));
+      expect(wallet.payoutMethods.single.accountLabel, 'KBZPay phone number');
+      expect(wallet.payoutMethods.single.input, 'phone');
     });
 
     test('an older payload without a meter starts it at zero', () {

@@ -250,6 +250,36 @@ class _EarnCardState extends ConsumerState<_EarnCard> {
     final wallet = widget.wallet;
     final adAvailable = wallet.adsRemainingToday > 0;
 
+    // The admin can switch either row off; the card goes when both are.
+    final rows = <Widget>[
+      if (wallet.checkInEnabled)
+        _EarnRow(
+          icon: Icons.calendar_month_rounded,
+          title: 'Daily check-in',
+          subtitle: wallet.checkInAvailable
+              ? 'Claim ${wallet.checkInPoints} points today'
+              : 'Already claimed — come back tomorrow',
+          action: wallet.checkInAvailable ? 'Claim' : 'Done',
+          busy: _checkingIn,
+          enabled: wallet.checkInAvailable,
+          onTap: _checkIn,
+        ),
+      if (wallet.adRewardEnabled)
+        _EarnRow(
+          icon: Icons.smart_display_rounded,
+          title: 'Watch an ad',
+          subtitle: adAvailable
+              ? '+${wallet.adRewardPoints} points · ${wallet.adsRemainingToday} left today'
+              : 'Daily ad limit reached',
+          action: 'Watch',
+          busy: _watchingAd,
+          enabled: adAvailable,
+          onTap: _watchAd,
+        ),
+    ];
+
+    if (rows.isEmpty) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -259,32 +289,14 @@ class _EarnCardState extends ConsumerState<_EarnCard> {
       ),
       child: Column(
         children: [
-          _EarnRow(
-            icon: Icons.calendar_month_rounded,
-            title: 'Daily check-in',
-            subtitle: wallet.checkInAvailable
-                ? 'Claim ${wallet.checkInPoints} points today'
-                : 'Already claimed — come back tomorrow',
-            action: wallet.checkInAvailable ? 'Claim' : 'Done',
-            busy: _checkingIn,
-            enabled: wallet.checkInAvailable,
-            onTap: _checkIn,
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Divider(),
-          ),
-          _EarnRow(
-            icon: Icons.smart_display_rounded,
-            title: 'Watch an ad',
-            subtitle: adAvailable
-                ? '+${wallet.adRewardPoints} points · ${wallet.adsRemainingToday} left today'
-                : 'Daily ad limit reached',
-            action: 'Watch',
-            busy: _watchingAd,
-            enabled: adAvailable,
-            onTap: _watchAd,
-          ),
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Divider(),
+              ),
+            rows[i],
+          ],
         ],
       ),
     );
